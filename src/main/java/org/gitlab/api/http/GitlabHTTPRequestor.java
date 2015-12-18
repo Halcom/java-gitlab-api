@@ -1,7 +1,10 @@
 package org.gitlab.api.http;
 
 import org.apache.commons.io.IOUtils;
+import org.gitlab.api.AuthMethod;
 import org.gitlab.api.GitlabAPI;
+import org.gitlab.api.GitlabAPIException;
+import org.gitlab.api.TokenType;
 import org.gitlab.api.models.GitlabCommit;
 
 import javax.net.ssl.*;
@@ -34,6 +37,10 @@ public class GitlabHTTPRequestor {
     private String method = "GET"; // Default to GET requests
     private Map<String, Object> data = new HashMap<String, Object>();
 
+    private String apiToken;
+    private TokenType tokenType;
+    private AuthMethod authMethod;
+
     private enum METHOD {
         GET, PUT, POST, PATCH, DELETE, HEAD, OPTIONS, TRACE;
 
@@ -54,6 +61,22 @@ public class GitlabHTTPRequestor {
 
     public GitlabHTTPRequestor(GitlabAPI root) {
         this.root = root;
+    }
+
+    /**
+     * Sets authentication data for the request.
+     * Has a fluent api for method chaining.
+     *
+     * @param token  The token value
+     * @param type   The type of the token
+     * @param method The authentication method
+     * @return this
+     */
+    public GitlabHTTPRequestor authenticate(String token, TokenType type, AuthMethod method) {
+        this.apiToken = token;
+        this.tokenType = type;
+        this.authMethod = method;
+        return this;
     }
 
     /**
@@ -168,6 +191,7 @@ public class GitlabHTTPRequestor {
                 }
             }
 
+            @Override
             public boolean hasNext() {
                 fetch();
                 if (next != null && next.getClass().isArray()) {
@@ -178,6 +202,7 @@ public class GitlabHTTPRequestor {
                 }
             }
 
+            @Override
             public T next() {
                 fetch();
                 T record = next;
@@ -190,6 +215,7 @@ public class GitlabHTTPRequestor {
                 return record;
             }
 
+            @Override
             public void remove() {
                 throw new UnsupportedOperationException();
             }
@@ -236,11 +262,11 @@ public class GitlabHTTPRequestor {
                         // there is a bug in the Gitlab CE API
                         // (https://gitlab.com/gitlab-org/gitlab-ce/issues/759)
                         // that starts pagination with page=0 for commits
-                        this.url = new URL(url + "&page=1");
+                        this.url = new URL(url + (url.indexOf('?') > 0 ? '&' : '?') + "page=1");
                     } else {
                         // Since the page query was not present, its safe to assume that we just
                         // currently used the first page, so we can default to page 2
-                        this.url = new URL(url + "&page=2");
+                        this.url = new URL(url + (url.indexOf('?') > 0 ? '&' : '?') + "&page=2");
                     }
                 }
             }
@@ -262,7 +288,16 @@ public class GitlabHTTPRequestor {
             ignoreCertificateErrors();
         }
 
+        if (apiToken != null && authMethod == AuthMethod.URL_PARAMETER) {
+            String urlWithAuth = url.toString();
+            urlWithAuth = urlWithAuth + (urlWithAuth.indexOf('?') > 0 ? '&' : '?') + tokenType.getTokenParamName() + "=" + apiToken;
+            url = new URL(urlWithAuth);
+        }
+
         HttpURLConnection connection = (HttpURLConnection) url.openConnection();
+        if (apiToken != null && authMethod == AuthMethod.HEADER) {
+            connection.setRequestProperty(tokenType.getTokenHeaderName(), String.format(tokenType.getTokenHeaderFormat(), apiToken));
+        }
 
         try {
             connection.setRequestMethod(method);
@@ -322,11 +357,11 @@ public class GitlabHTTPRequestor {
 
         InputStream es = wrapStream(connection, connection.getErrorStream());
         try {
+            String error = null;
             if (es != null) {
-                throw (IOException) new IOException(IOUtils.toString(es, "UTF-8")).initCause(e);
-            } else {
-                throw e;
+                error = IOUtils.toString(es, "UTF-8");
             }
+            throw new GitlabAPIException(error, connection.getResponseCode(), e);
         } finally {
             IOUtils.closeQuietly(es);
         }
@@ -335,14 +370,17 @@ public class GitlabHTTPRequestor {
     private void ignoreCertificateErrors() {
         TrustManager[] trustAllCerts = new TrustManager[]{
                 new X509TrustManager() {
+                    @Override
                     public java.security.cert.X509Certificate[] getAcceptedIssuers() {
                         return null;
                     }
 
+                    @Override
                     public void checkClientTrusted(
                             java.security.cert.X509Certificate[] certs, String authType) {
                     }
 
+                    @Override
                     public void checkServerTrusted(
                             java.security.cert.X509Certificate[] certs, String authType) {
                     }

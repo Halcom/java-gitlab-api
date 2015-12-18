@@ -15,7 +15,7 @@ import static org.junit.Assert.*;
 import static org.junit.Assume.assumeNoException;
 
 @Ignore
-public class GitlabAPIT {
+public class GitlabAPITest {
 
     GitlabAPI api;
 
@@ -32,12 +32,19 @@ public class GitlabAPIT {
             api.dispatch().with("login", "INVALID").with("password", rand).to("session", GitlabUser.class);
         } catch (ConnectException e) {
             assumeNoException("GITLAB not running on '" + TEST_URL + "', skipping...", e);
-        } catch (IOException e) {
+        } catch (GitlabAPIException e) {
             final String message = e.getMessage();
             if (!message.equals("{\"message\":\"401 Unauthorized\"}")) {
                 throw new AssertionError("Expected an unauthorized message", e);
+            } else if(e.getResponseCode() != 401) {
+                throw new AssertionError("Expected 401 code", e);
             }
         }
+    }
+
+    @Test
+    public void testAllProjects() throws IOException {
+        api.getAllProjects();
     }
 
     @Test
@@ -47,7 +54,7 @@ public class GitlabAPIT {
 
     @Test
     public void testGetAPIUrl() throws IOException {
-        URL expected = new URL(TEST_URL + "/api/v3/?private_token=" + TEST_TOKEN);
+        URL expected = new URL(TEST_URL + "/api/v3/");
         assertEquals(expected, api.getAPIUrl(""));
     }
 
